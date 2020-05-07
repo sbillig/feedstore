@@ -15,15 +15,15 @@ pub trait FeedEntry: Serialize + DeserializeOwned {
     type Id: Serialize + DeserializeOwned;
     type Seq: Copy + Bounded + Zero + Serialize + DeserializeOwned;
 
-    fn id(&self) -> Self::Id;
-    fn seq(&self) -> Self::Seq;
+    fn id_seq(&self) -> (Self::Id, Self::Seq);
 }
 
 pub trait FeedStore<F>
 where
     F: Feed,
 {
-    type Error;
+    type Error: std::error::Error;
+    // type EntryId = <F::Entry as FeedEntry>::Id;
 
     fn append(&self, feed_id: &F::Id, entry: &F::Entry) -> Result<(), Self::Error>;
 

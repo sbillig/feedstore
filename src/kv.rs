@@ -102,14 +102,16 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
     type Error = Error;
 
     fn append(&self, feed_id: &F::Id, entry: &F::Entry) -> Result<()> {
-        let feedseq = self.serialize(&(feed_id, entry.seq()))?;
+        let (id, seq) = entry.id_seq();
+
+        let feedseq = self.serialize(&(feed_id, seq))?;
 
         self.by_feedseq
             .insert(&feedseq, self.serialize(entry)?)
             .context(Sled)?;
 
         self.by_entryid
-            .insert(self.serialize(&entry.id())?, feedseq)
+            .insert(self.serialize(&id)?, feedseq)
             .context(Sled)?;
 
         Ok(())
@@ -126,7 +128,9 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
         let mut entry_id = vec![];
 
         while let Some(e) = entries.next() {
-            let feedseq = self.serialize(&(feed_id, e.seq()))?;
+            let (id, seq) = e.id_seq();
+
+            let feedseq = self.serialize(&(feed_id, seq))?;
 
             self.by_feedseq
                 .insert(&feedseq, self.serialize(&e)?)
@@ -134,7 +138,7 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
 
             entry_id.clear();
             self.coder
-                .serialize_into(&mut entry_id, &e.id())
+                .serialize_into(&mut entry_id, &id)
                 .context(Coder)?;
 
             self.by_entryid.insert(&entry_id, feedseq).context(Sled)?;
@@ -378,5 +382,18 @@ mod tests {
             assert_eq!(e.seq(), i);
         }
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn generic() {
+        let db = KvFeedStore::<CoolFeed>::temp().unwrap();
+        use_feedstore(&db).unwrap();
+    }
+
+    fn use_feedstore<F: FeedStore<CoolFeed>>(db: &F) -> Result<[u8; 32], F::Error> {
+        let mut ann = CoolFeed::new("ann");
+        let e = ann.new_entry("hi");
+        db.append(&ann.id, &e).unwrap();
+        Ok(e.id)
     }
 }
