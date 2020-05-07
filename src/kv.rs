@@ -270,11 +270,8 @@ mod tests {
         type Id = [u8; 32];
         type Seq = u32;
 
-        fn id(&self) -> Self::Id {
-            self.id
-        }
-        fn seq(&self) -> Self::Seq {
-            self.seq
+        fn id_seq(&self) -> (Self::Id, Self::Seq) {
+            (self.id, self.seq)
         }
     }
 
@@ -300,17 +297,17 @@ mod tests {
         assert_eq!(&b0, &db.get_entry_by_seq(&bob.id, 0).unwrap().unwrap());
         assert_eq!(&b1, &db.get_entry_by_seq(&bob.id, 1).unwrap().unwrap());
 
-        assert_eq!(&a0, &db.get_entry_by_id(&a0.id()).unwrap().unwrap());
-        assert_eq!(&a1, &db.get_entry_by_id(&a1.id()).unwrap().unwrap());
-        assert_eq!(&b0, &db.get_entry_by_id(&b0.id()).unwrap().unwrap());
-        assert_eq!(&b1, &db.get_entry_by_id(&b1.id()).unwrap().unwrap());
+        assert_eq!(&a0, &db.get_entry_by_id(&a0.id).unwrap().unwrap());
+        assert_eq!(&a1, &db.get_entry_by_id(&a1.id).unwrap().unwrap());
+        assert_eq!(&b0, &db.get_entry_by_id(&b0.id).unwrap().unwrap());
+        assert_eq!(&b1, &db.get_entry_by_id(&b1.id).unwrap().unwrap());
 
         let a2 = ann.new_entry("hooray");
-        assert!(&db.get_entry_by_id(&a2.id()).unwrap().is_none());
+        assert!(&db.get_entry_by_id(&a2.id).unwrap().is_none());
         assert!(db.get_entry_by_seq(&ann.id, 2).unwrap().is_none());
         db.append(&ann.id, &a2).unwrap();
         assert_eq!(&a2, &db.get_entry_by_seq(&ann.id, 2).unwrap().unwrap());
-        assert_eq!(&a2, &db.get_entry_by_id(&a2.id()).unwrap().unwrap());
+        assert_eq!(&a2, &db.get_entry_by_id(&a2.id).unwrap().unwrap());
 
         let a3 = ann.new_entry("asdf");
         db.append(&ann.id, &a3).unwrap();
@@ -355,7 +352,7 @@ mod tests {
 
         let mut iter = db.get_entries_in_range(&ann.id, range.clone());
         for i in range.clone() {
-            assert_eq!(iter.next().unwrap().unwrap().seq(), i);
+            assert_eq!(iter.next().unwrap().unwrap().seq, i);
         }
         assert!(iter.next().is_none());
     }
@@ -368,7 +365,7 @@ mod tests {
         let id = ann.id.clone();
         let iter = std::iter::from_fn(move || {
             let e = ann.new_entry("hello");
-            if e.seq() > 50 {
+            if e.seq > 50 {
                 None
             } else {
                 Some(e)
@@ -379,7 +376,7 @@ mod tests {
         let mut iter = db.get_entries_in_range(&id, ..);
         for i in 0..=50 {
             let e = iter.next().unwrap().unwrap();
-            assert_eq!(e.seq(), i);
+            assert_eq!(e.seq, i);
         }
         assert!(iter.next().is_none());
     }
