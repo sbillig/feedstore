@@ -1,5 +1,5 @@
 use crate::util::{bound_copy, bound_map};
-use crate::{Feed, FeedEntry, FeedStore};
+use crate::{Entry, FeedStore};
 use bincode;
 use num::{Bounded, Zero};
 use serde::{Deserialize, Serialize};
@@ -20,10 +20,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct KvFeedStore<F>
-where
-    F: Feed,
-{
+pub struct KvFeedStore<E: Entry> {
     // db: sled::Db,
     /// (FeedId, Seq) => Entry
     by_feedseq: sled::Tree,
@@ -32,13 +29,10 @@ where
     by_entryid: sled::Tree,
 
     coder: bincode::Config,
-    _feed_type: PhantomData<F>,
+    _entry_type: PhantomData<E>,
 }
 
-impl<F> KvFeedStore<F>
-where
-    F: Feed,
-{
+impl<E: Entry> KvFeedStore<E> {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::open_with_config(Self::default_config().path(path).create_new(true))
     }
@@ -62,7 +56,7 @@ where
             by_feedseq,
             by_entryid,
             coder,
-            _feed_type: PhantomData,
+            _entry_type: PhantomData,
         })
     }
 
@@ -93,15 +87,15 @@ where
         self.coder.serialize(t).context(Coder)
     }
 
-    fn deserialize<'a, T: Deserialize<'a>>(&self, b: &'a [u8]) -> Result<T> {
+    fn deserialize<'de, T: Deserialize<'de>>(&self, b: &'de [u8]) -> Result<T> {
         self.coder.deserialize(b).context(Coder)
     }
 }
 
-impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
+impl<E: Entry> FeedStore<E> for KvFeedStore<E> {
     type Error = Error;
 
-    fn append(&self, feed_id: &F::Id, entry: &F::Entry) -> Result<()> {
+    fn append(&self, feed_id: &E::FeedId, entry: &E) -> Result<()> {
         let (id, seq) = entry.id_seq();
 
         let feedseq = self.serialize(&(feed_id, seq))?;
@@ -117,9 +111,9 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
         Ok(())
     }
 
-    fn append_all<I: Iterator<Item = F::Entry>>(
+    fn append_all<I: Iterator<Item = E>>(
         &self,
-        feed_id: &F::Id,
+        feed_id: &E::FeedId,
         mut entries: I,
     ) -> Result<(), Self::Error> {
         // The only allocation we can avoid on each iteration is the entry_id buffer,
@@ -146,7 +140,7 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
         Ok(())
     }
 
-    fn get_entry_by_id(&self, entry_id: &<F::Entry as FeedEntry>::Id) -> Result<Option<F::Entry>> {
+    fn get_entry_by_id(&self, entry_id: &E::Id) -> Result<Option<E>> {
         if let Some(feedseq) = self
             .by_entryid
             .get(self.serialize(entry_id)?)
@@ -159,11 +153,7 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
         Ok(None)
     }
 
-    fn get_entry_by_seq(
-        &self,
-        feed_id: &F::Id,
-        seq: <F::Entry as FeedEntry>::Seq,
-    ) -> Result<Option<F::Entry>> {
+    fn get_entry_by_seq(&self, feed_id: &E::FeedId, seq: E::Seq) -> Result<Option<E>> {
         self.by_feedseq
             .get(self.serialize(&(feed_id, seq))?)
             .context(Sled)
@@ -174,20 +164,20 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
 
     fn get_entries_in_range<R>(
         &self,
-        feed_id: &F::Id,
+        feed_id: &E::FeedId,
         range: R,
-    ) -> Box<dyn Iterator<Item = Result<F::Entry>>>
+    ) -> Box<dyn Iterator<Item = Result<E>>>
     where
-        R: RangeBounds<<F::Entry as FeedEntry>::Seq>,
+        R: RangeBounds<E::Seq>,
     {
         let f = |seq| self.serialize(&(feed_id, seq)).unwrap();
 
         let start = match bound_copy(range.start_bound()) {
-            Bound::Unbounded => Bound::Included(<F::Entry as FeedEntry>::Seq::zero()),
+            Bound::Unbounded => Bound::Included(E::Seq::zero()),
             b => b,
         };
         let end = match bound_copy(range.end_bound()) {
-            Bound::Unbounded => Bound::Included(<F::Entry as FeedEntry>::Seq::max_value()),
+            Bound::Unbounded => Bound::Included(E::Seq::max_value()),
             b => b,
         };
 
@@ -203,16 +193,16 @@ impl<F: Feed> FeedStore<F> for KvFeedStore<F> {
         }))
     }
 
-    fn get_latest_entry(&self, feed_id: &F::Id) -> Result<Option<F::Entry>> {
+    fn get_latest_entry(&self, feed_id: &E::FeedId) -> Result<Option<E>> {
         match self
             .by_feedseq
-            .get_lt(self.serialize(&(feed_id, <F::Entry as FeedEntry>::Seq::max_value()))?)
+            .get_lt(self.serialize(&(feed_id, E::Seq::max_value()))?)
             .context(Sled)
         {
             Ok(Some((k, v))) => {
-                let (id, _seq) = self.deserialize::<(F::Id, <F::Entry as FeedEntry>::Seq)>(&k)?;
+                let (id, _seq) = self.deserialize::<(E::FeedId, E::Seq)>(&k)?;
                 if &id == feed_id {
-                    Some(self.deserialize::<F::Entry>(&v)).transpose()
+                    Some(self.deserialize::<E>(&v)).transpose()
                 } else {
                     Ok(None)
                 }
@@ -251,10 +241,6 @@ mod tests {
         }
     }
 
-    impl Feed for CoolFeed {
-        type Id = String;
-        type Entry = CoolEntry;
-    }
     #[derive(Debug, Serialize, Deserialize)]
     struct CoolEntry {
         id: [u8; 32],
@@ -266,9 +252,10 @@ mod tests {
             self.seq == e.seq && self.id == e.id && self.body == e.body
         }
     }
-    impl FeedEntry for CoolEntry {
+    impl Entry for CoolEntry {
         type Id = [u8; 32];
         type Seq = u32;
+        type FeedId = String;
 
         fn id_seq(&self) -> (Self::Id, Self::Seq) {
             (self.id, self.seq)
@@ -277,7 +264,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        let db = KvFeedStore::<CoolFeed>::temp().unwrap();
+        let db = KvFeedStore::<CoolEntry>::temp().unwrap();
 
         let mut ann = CoolFeed::new("ann");
         let mut bob = CoolFeed::new("bob");
@@ -341,7 +328,7 @@ mod tests {
 
     #[test]
     fn endian() {
-        let db = KvFeedStore::<CoolFeed>::temp().unwrap();
+        let db = KvFeedStore::<CoolEntry>::temp().unwrap();
         let mut ann = CoolFeed::new("ann");
 
         let range = 0..=256;
@@ -359,7 +346,7 @@ mod tests {
 
     #[test]
     fn append_iter() {
-        let db = KvFeedStore::<CoolFeed>::temp().unwrap();
+        let db = KvFeedStore::<CoolEntry>::temp().unwrap();
         let mut ann = CoolFeed::new("ann");
 
         let id = ann.id.clone();
@@ -383,11 +370,11 @@ mod tests {
 
     #[test]
     fn generic() {
-        let db = KvFeedStore::<CoolFeed>::temp().unwrap();
+        let db = KvFeedStore::<CoolEntry>::temp().unwrap();
         use_feedstore(&db).unwrap();
     }
 
-    fn use_feedstore<F: FeedStore<CoolFeed>>(db: &F) -> Result<[u8; 32], F::Error> {
+    fn use_feedstore<F: FeedStore<CoolEntry>>(db: &F) -> Result<[u8; 32], F::Error> {
         let mut ann = CoolFeed::new("ann");
         let e = ann.new_entry("hi");
         db.append(&ann.id, &e).unwrap();
